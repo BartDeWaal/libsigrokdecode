@@ -510,10 +510,10 @@ class Modbus_ADU_SC(Modbus_ADU):
                     run_indicator_status))
 
         self.put_last_byte(
-                "data",
-                "Device specific data: {}, '{}'".format(data[-1].data,
-                                                        chr(data[-1].data)),
-                2 + bytecount)
+            "data",
+            "Device specific data: {}, '{}'".format(data[-1].data,
+                                                    chr(data[-1].data)),
+            2 + bytecount)
 
         self.check_CRC(4 + bytecount)
 
@@ -706,7 +706,7 @@ class Modbus_ADU_CS(Modbus_ADU):
                 6, "error",
                 "Bad byte count, is {}, should be {}".format(bytecount,
                                                              proper_bytecount))
-        self.mimumum_length =  bytecount + 9
+        self.mimumum_length = bytecount + 9
 
         self.put_last_byte("data", 'Value 0x{:X}', 6 + bytecount)
 
@@ -767,7 +767,7 @@ class Modbus_ADU_CS(Modbus_ADU):
 
     def parse_read_write_registers(self):
         """ Parse function 23: Read/Write multiple registers """
-        self.minimum_length = 13 
+        self.minimum_length = 13
 
         self.put_if_needed(1, "function",
                            "Function 23: Read/Write Multiple Registers")
