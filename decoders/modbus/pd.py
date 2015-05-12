@@ -48,7 +48,8 @@ class Modbus_ADU:
         # next frame should be started
         self.startNewFrame = False
 
-        # If there is an error in a frame, we'd like to highlight it. Keep track of errors
+        # If there is an error in a frame, we'd like to highlight it. Keep
+        # track of errors
         self.hasError = False
 
     def add_data(self, start, end, data):
@@ -273,6 +274,28 @@ class Modbus_ADU:
 
         self.check_CRC(9)
 
+    def parse_not_implemented(self):
+        """ Explicitly mark certain functions as legal functions, but not
+        implemented in this parser. This is due to the author not being able to
+        find anything that supports these functions """
+
+        # Mentioning what function it is is no problem
+        function = self.data[1].data
+        functionname = {
+            20: "Read File Record",
+            21: "Write File Record",
+            24: "Read FIFO Queue",
+            43: "Read Device Identification/Encapsulated Interface Transport",
+        }[function]
+        self.put_if_needed(
+            1, "function",
+            "Function {}: {} (not supported)".format(function,
+                                                     functionname))
+
+        # From there on out we can keep marking it unsupported
+        self.put_last_byte("data", "This function is not currently supported "
+                                   "by the sigrok modbus module")
+
 
 class Modbus_ADU_SC(Modbus_ADU):
     """ SC stands for Server -> Client """
@@ -309,6 +332,8 @@ class Modbus_ADU_SC(Modbus_ADU):
                 self.parse_report_server_id()
             elif function == 22:
                 self.parse_mask_write_register()
+            elif function in {21, 21, 24, 43}:
+                self.parse_not_implemented()
             elif function > 0x80:
                 self.parse_error()
             else:
@@ -615,6 +640,8 @@ class Modbus_ADU_CS(Modbus_ADU):
                 self.parse_mask_write_register()
             elif function == 23:
                 self.parse_read_write_registers()
+            elif function in {21, 21, 24, 43}:
+                self.parse_not_implemented()
             else:
                 self.put_if_needed(1, "error",
                                    "Unknown function: {}".format(data[1].data))
