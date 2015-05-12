@@ -48,6 +48,9 @@ class Modbus_ADU:
         # next frame should be started
         self.startNewFrame = False
 
+        # If there is an error in a frame, we'd like to highlight it. Keep track of errors
+        self.hasError = False
+
     def add_data(self, start, end, data):
         ptype, rxtx, pdata = data
         self.last_read = end
@@ -67,6 +70,9 @@ class Modbus_ADU:
         if byte_to_put > len(self.data)-1:
             # if the byte_to_put hasn't been read yet
             raise No_more_data
+
+        if annotation == "error":
+            self.hasError = True
 
         if byte_to_put > self.last_byte_put:
             self.parent.puta(
@@ -100,6 +106,17 @@ class Modbus_ADU:
                 data[self.last_byte_put].end, message_overflow,
                 self.annotation_prefix + "error",
                 "Message too short or not finished")
+            self.hasError = True
+        if self.hasError and self.parent.options["ScChannel"] == "RX":
+            # If we are on RX mode (so client->server and server->client
+            # messages can be seperated) we like to mark blocks containing
+            # errors. We don't do this in TX mode, because then we interpret
+            # each frame as both a client->server and server->client frame, and
+            # one of those is bound to contain an error, making highlighting
+            # frames useless.
+            self.parent.puta(data[0].start, data[-1].end,
+                             "error-indication",
+                             "Frame contains error")
         if len(data) > 256:
             try:
                 self.put_if_needed(
@@ -119,7 +136,7 @@ class Modbus_ADU:
             self.put_if_needed(byte_to_put, 'crc', "CRC correct")
         else:
             self.put_if_needed(
-                byte_to_put, 'crc',
+                byte_to_put, 'error',
                 "CRC should be {} {}".format(crc_byte1, crc_byte2))
 
     def half_word(self, start):
@@ -836,10 +853,12 @@ class Decoder(srd.Decoder):
         ('Cs-data', ''),
         ('Cs-length', ''),
         ('Cs-error', ''),
+        ('error-indication', ''),
     )
     annotation_rows = (
         ('sc', 'server->client', (0, 1, 2,  3,  4,  5, 6)),
         ('cs', 'client->server', (7, 8, 9, 10, 11, 12, 13)),
+        ('error-indicator', 'Errors in frame', (14,)),
     )
     options = (
         dict(
