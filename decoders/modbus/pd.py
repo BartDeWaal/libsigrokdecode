@@ -1,7 +1,24 @@
-## Modbus is a protocol where you have a client and one or more servers. This
-## decoder is for Modbus RTU.
-## The RX channel will be checked for both client->server and server->client
-## communication, the TX channel only for client->server.
+# This file is part of the libsigrokdecode project
+# Copyright 2015 Bart de Waal
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Modbus is a protocol where you have a client and one or more servers. This
+# decoder is for Modbus RTU.
+# The RX channel will be checked for both client->server and server->client
+# communication, the TX channel only for client->server.
+
 
 from math import ceil
 
@@ -18,6 +35,7 @@ class No_more_data(Exception):
 
 
 class Data:
+    """ The Data class is used to hold the bytes from the serial decoder """
     def __init__(self, start, end, data):
         self.start = start
         self.end = end
@@ -30,13 +48,14 @@ class Modbus_ADU:
     decoded data to the backend as it reads it. In modbus's case, the state is
     the ADU up to that point. This class represents the state and writes the
     messages to the backend.
-    This class is for the common infrastructure between CS and SC"""
+    This class is for the common infrastructure between CS and SC. It should
+    not be used directly, only inhereted from. """
 
     def __init__(self, parent, start, write_channel, annotation_prefix):
-        self.data = []
-        self.parent = parent
+        self.data = []  # List of all the data received up to now
+        self.parent = parent  # Reference to the decoder object
         self.start = start
-        self.last_read = start
+        self.last_read = start  # The last moment parsed by this ADU object
         self.write_channel = write_channel
         self.last_byte_put = -1
         self.annotation_prefix = annotation_prefix
@@ -53,11 +72,15 @@ class Modbus_ADU:
         self.hasError = False
 
     def add_data(self, start, end, data):
+        """ Let the frame handle another piece of data.
+        start: start of this data
+        end: end of this data
+        data: data as received from uart decoder """
         ptype, rxtx, pdata = data
         self.last_read = end
         if ptype == 'DATA':
             self.data.append(Data(start, end, pdata[0]))
-            self.parse()
+            self.parse()  # parse is defined in the specific type of ADU
 
     def put_if_needed(self, byte_to_put, annotation, message):
         """ This class keeps track of how much of the data has already been
@@ -277,7 +300,8 @@ class Modbus_ADU:
     def parse_not_implemented(self):
         """ Explicitly mark certain functions as legal functions, but not
         implemented in this parser. This is due to the author not being able to
-        find anything that supports these functions """
+        find anything (hardware or software) that supports these functions """
+        # TODO: implement these functions
 
         # Mentioning what function it is is no problem
         function = self.data[1].data
@@ -300,7 +324,10 @@ class Modbus_ADU:
 class Modbus_ADU_SC(Modbus_ADU):
     """ SC stands for Server -> Client """
     def parse(self):
+        """ Select which specific modbus function we should parse """
         data = self.data
+
+        # This try-catch is being used as flow control
         try:
             server_id = data[0].data
             if 1 <= server_id <= 247:
@@ -560,7 +587,10 @@ class Modbus_ADU_SC(Modbus_ADU):
         self.check_CRC(4 + bytecount)
 
     def parse_error(self):
+        """ Parse a modbus error message """
         self.mimumum_length = 5
+        # The function code of an error is always 0x80 above the function call
+        # that caused it.
         functioncode = self.data[1].data - 0x80
 
         functions = {
@@ -611,7 +641,10 @@ class Modbus_ADU_SC(Modbus_ADU):
 class Modbus_ADU_CS(Modbus_ADU):
     """ CS stands for Client -> Server """
     def parse(self):
+        """ Select which specific modbus function we should parse """
         data = self.data
+
+        # This try-catch is being used as flow control
         try:
             server_id = data[0].data
             message = ""
@@ -762,8 +795,10 @@ class Modbus_ADU_CS(Modbus_ADU):
         data = self.data
 
         bytecount = data[2].data
+
         self.minimum_length = 5 + bytecount
         # 1 for serverID, 1 for function, 1 for bytecount, 2 for CRC
+
         if 0x07 <= bytecount <= 0xF5:
             self.put_if_needed(2, "length",
                                "Request is {} bytes long".format(bytecount))
@@ -857,6 +892,7 @@ class Modbus_ADU_CS(Modbus_ADU):
 
 
 class Decoder(srd.Decoder):
+    """ The modbus decoder """
     api_version = 2
     id = 'modbus'
     name = 'Modbus'
@@ -896,17 +932,30 @@ class Decoder(srd.Decoder):
         )
 
     def __init__(self, **kwargs):
-        self.ADUSc = None
-        self.ADUCs = None
+        self.ADUSc = None  # Start off with empty slave -> client ADU
+        self.ADUCs = None  # Start off with empty client -> slave ADU
+        # The reason we have both (Despite not supporting full duplex comms) is
+        # because we want to be able to decode the message as both client ->
+        # server and server -> client, and let the user see which of the two
+        # the ADU was.
 
-        self.bitlength = None
+        self.bitlength = None  # We will later test how long a bit is
 
     def start(self):
         self.out_ann = self.register(srd.OUTPUT_ANN)
 
     def decode(self, ss, es, data):
+        """ The function that is called by sigrok to decode the next byte of
+        the signal """
+        # Split the data into:
+        # ptype: The packet type. See uart decoder for documentation
+        # rxtx: the channel this is on
+        # pdata: This is a tuple, pdata[0] is the integer value of this byte if
+        #        ptype= 'DATA'
         ptype, rxtx, pdata = data
 
+        # Decide what ADU(s) we need this packet to go to
+        # Note that it's possible to go to both ADUs
         if rxtx == TX:
             self.decode_ADU(ss, es, data, "Cs")
         if rxtx == TX and self.options["ScChannel"] == "TX":
@@ -916,23 +965,35 @@ class Decoder(srd.Decoder):
 
     def puta(self, start, end, annotation_channel_text, message):
         """ Put an annotation from start to end, with annotation_channel as a
-        string """
+        string. This means you don't have to know the annotation_channel's
+        number to write annotations to it. """
         annotation_channel = \
             [s[0] for s in self.annotations].index(annotation_channel_text)
         self.put(start, end, self.out_ann,
                  [annotation_channel, [message]])
 
     def decode_ADU(self, ss, es, data, direction):
+        """ Decode the next byte or bit (depending on type) in the ADU.
+        ss: Start time of the data
+        es: end time of the data
+        data: data as passed from uart decoder
+        direction: is this data for the Cs (client -> server) or Sc (Server ->
+                   client) being decoded right now? """
         ptype, rxtx, pdata = data
 
-        # We need to know how long bits are before we can start decoding
-        # messages
+        # We don't have a nice way to get the baud rate from uart, so we have
+        # to figure out how long a bit lasts. We do this by looking at the
+        # length of (probably) the startbit.
         if self.bitlength is None:
             if ptype == "STARTBIT" or ptype == "STOPBIT":
                 self.bitlength = es - ss
             else:
+                # If we don't know the bitlength yet, we can't start decoding
                 return
 
+        # Select the ADU, Create the ADU if needed
+        # Note that we set ADU.startNewFrame = True when we know the old one is
+        # over
         if direction == "Sc":
             if (self.ADUSc is None) or self.ADUSc.startNewFrame:
                 self.ADUSc = Modbus_ADU_SC(self, ss, TX, "Sc-")
@@ -942,6 +1003,7 @@ class Decoder(srd.Decoder):
                 self.ADUCs = Modbus_ADU_CS(self, ss, TX, "Cs-")
             ADU = self.ADUCs
 
+        # We need to determine if the last ADU is over.
         # According to the modbus spec, there should be 3.5 characters worth of
         # space between each message. But if within a message there is a length
         # of more than 1.5 character, that's an error. For our purposes
@@ -951,11 +1013,13 @@ class Decoder(srd.Decoder):
         if (ss - ADU.last_read) <= self.bitlength * 28:
             ADU.add_data(ss, es, data)
         else:
-            # if there is any data in the ADU
+            # It's been too long since the last part of the ADU!
+            # if there is any data in the ADU we need to show it to the user
             if len(ADU.data) > 0:
                 # extend errors for 3 bits after last byte, we can guarentee
                 # space
                 ADU.close(ADU.data[-1].end + self.bitlength * 3)
 
             ADU.startNewFrame = True
+            # Restart this function, it will make a new ADU for us
             self.decode_ADU(ss, es, data, direction)
